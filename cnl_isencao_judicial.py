@@ -1,6 +1,21 @@
 from __future__ import annotations
+from placas import (
+    aplicar_mascara as _aplicar_mascara_comum,
+    descobrir_mascara as _descobrir_mascara_comum,
+    distancia_placas as _distancia_placas_comum,
+    distancia_ponderada as _distancia_ponderada,
+    normalizar_ocr as _normalizar_ocr_comum,
+    normalizar_placa as _normalizar_placa,
+    CONFUNDIVEIS as _CONFUNDIVEIS,
+    MAPA_LETRAS as _MAPA_LETRAS,
+    MAPA_DIGITOS as _MAPA_DIGITOS,
+)
+
+from common import extrair_bytes_imagem, enviar_json
 
 import functools
+import contextlib
+import io
 import json
 import re
 import shutil
@@ -19,6 +34,7 @@ from tqdm import tqdm
 
 from config import (
     BASE_DIR,
+    caminho_resultado,
     PYTHON_YOLO,
     PYTHON_OCR,
     DETECTOR_PY,
@@ -85,252 +101,53 @@ CAMPOS_SAIDA = (
 # CONFUNDÍVEIS
 # ============================================================
 
-_CONFUNDIVEIS: set[tuple[str, str]] = {
-    ("0", "O"),
-    ("O", "0"),
-
-    ("1", "I"),
-    ("I", "1"),
-
-    ("1", "L"),
-    ("L", "1"),
-
-    ("T", "I"),
-    ("I", "T"),
-
-    ("2", "Z"),
-    ("Z", "2"),
-
-    ("Z", "7"),
-    ("7", "Z"),
-
-    ("4", "A"),
-    ("A", "4"),
-
-    ("5", "S"),
-    ("S", "5"),
-
-    ("6", "G"),
-    ("G", "6"),
-
-    ("8", "B"),
-    ("B", "8"),
-
-    ("B", "E"),
-    ("E", "B"),
-
-    ("D", "0"),
-    ("0", "D"),
-
-    ("D", "O"),
-    ("O", "D"),
-}
 
 
 # ============================================================
 # MAPAS DE CORREÇÃO POR POSIÇÃO
 # ============================================================
 
-_MAPA_LETRAS = {
-    "0": "O",
-    "1": "I",
-    "2": "Z",
-    "4": "A",
-    "5": "S",
-    "6": "G",
-    "7": "Z",
-    "8": "B",
-}
 
-_MAPA_DIGITOS = {
-    "O": "0",
-    "Q": "0",
-    "D": "0",
-    "I": "1",
-    "L": "1",
-    "T": "7",
-    "J": "1",
-    "Z": "2",
-    "A": "4",
-    "S": "5",
-    "G": "6",
-    "B": "8",
-    "E": "8",
-    "U": "0",
-}
 
 
 # ============================================================
 # LEVENSHTEIN
 # ============================================================
 
-@functools.lru_cache(maxsize=16384)
-def _levenshtein(
-    a: str,
-    b: str,
-) -> float:
-
-    anterior = list(
-        range(len(b) + 1)
-    )
-
-    for i, ca in enumerate(
-        a,
-        start=1,
-    ):
-
-        atual = [i]
-
-        for j, cb in enumerate(
-            b,
-            start=1,
-        ):
-
-            if ca == cb:
-
-                custo = 0.0
-
-            elif (
-                ca,
-                cb,
-            ) in _CONFUNDIVEIS:
-
-                custo = 0.35
-
-            else:
-
-                custo = 1.0
-
-            atual.append(
-                min(
-                    anterior[j] + 1,
-                    atual[j - 1] + 1,
-                    anterior[j - 1] + custo,
-                )
-            )
-
-        anterior = atual
-
-    return anterior[-1]
+def _levenshtein(a: str, b: str) -> float:
+    return _distancia_ponderada(a, b, _CONFUNDIVEIS)
 
 
 # ============================================================
 # LIMPA TEXTO
 # ============================================================
 
-def limpar_texto(
-    valor,
-) -> str:
-
-    if valor is None:
-        return ""
-
-    texto = str(
-        valor
-    ).upper()
-
-    return re.sub(
-        r"[^A-Z0-9]",
-        "",
-        texto,
-    )
+def limpar_texto(valor) -> str:
+    return _normalizar_placa(valor)
 
 
 # ============================================================
 # DISTÂNCIA
 # ============================================================
 
-def distancia_placas(
-    placa_a: str,
-    placa_b: str,
-) -> float:
-
-    a = limpar_texto(
-        placa_a
-    )
-
-    b = limpar_texto(
-        placa_b
-    )
-
-    if not a or not b:
-        return 999.0
-
-    return _levenshtein(
-        a,
-        b,
-    )
+def distancia_placas(placa_a: str, placa_b: str) -> float:
+    return _distancia_placas_comum(placa_a, placa_b, _CONFUNDIVEIS)
 
 
 # ============================================================
 # DESCOBRE MÁSCARA DA PLACA
 # ============================================================
 
-def descobrir_mascara(
-    placa: str,
-) -> str:
-
-    placa = limpar_texto(
-        placa
-    )
-
-    if len(placa) != TAMANHO_PLACA:
-        return "LLLDLDD"
-
-    # Mercosul
-    # LLLDLDD
-    if placa[4].isalpha():
-        return "LLLDLDD"
-
-    # Modelo antigo
-    # LLLDDDD
-    return "LLLDDDD"
+def descobrir_mascara(placa: str) -> str:
+    return _descobrir_mascara_comum(placa, tamanho=TAMANHO_PLACA, mascara_invalida="LLLDLDD")
 
 
 # ============================================================
 # APLICA MÁSCARA DA PLACA
 # ============================================================
 
-def aplicar_mascara_placa(
-    candidato: str,
-    mascara: str,
-) -> str:
-
-    candidato = limpar_texto(
-        candidato
-    )
-
-    if len(candidato) != TAMANHO_PLACA:
-        return candidato
-
-    resultado = []
-
-    for caractere, tipo in zip(
-        candidato,
-        mascara,
-    ):
-
-        if tipo == "L":
-
-            resultado.append(
-                _MAPA_LETRAS.get(
-                    caractere,
-                    caractere,
-                )
-            )
-
-        else:
-
-            resultado.append(
-                _MAPA_DIGITOS.get(
-                    caractere,
-                    caractere,
-                )
-            )
-
-    return "".join(
-        resultado
-    )
+def aplicar_mascara_placa(candidato: str, mascara: str) -> str:
+    return _aplicar_mascara_comum(candidato, mascara, _MAPA_LETRAS, _MAPA_DIGITOS, tamanho=TAMANHO_PLACA, comprimento_invalido="manter")
 
 
 # ============================================================
@@ -962,17 +779,6 @@ def localizar_colunas(
 # EXTRAI IMAGEM
 # ============================================================
 
-def extrair_bytes_imagem(
-    imagem,
-):
-
-    try:
-
-        return imagem._data()
-
-    except Exception:
-
-        return None
 
 
 # ============================================================
@@ -1045,27 +851,6 @@ def descobrir_extensao(
 # JSON
 # ============================================================
 
-def enviar_json(
-    processo,
-    dados,
-):
-
-    if processo.poll() is not None:
-
-        raise RuntimeError(
-            "Processo já encerrou. "
-            f"Código: {processo.returncode}"
-        )
-
-    processo.stdin.write(
-        json.dumps(
-            dados,
-            ensure_ascii=False,
-        )
-        + "\n"
-    )
-
-    processo.stdin.flush()
 
 
 def ler_json(
@@ -3234,10 +3019,9 @@ def main():
     # SAÍDA ÚNICA
     # ========================================================
 
-    caminho_saida = (
-        pasta_base
-        /
-        "resultado_isencao_judicial.xlsx"
+    caminho_saida = caminho_resultado(
+        "cnl_isencao",
+        "resultado_isencao_judicial.xlsx",
     )
 
     # ========================================================
@@ -3248,6 +3032,7 @@ def main():
     processo_ocr = iniciar_ocr()
 
     todos_resultados = []
+    erros_arquivos = []
 
     inicio_geral = time.perf_counter()
 
@@ -3284,16 +3069,23 @@ def main():
 
             try:
 
-                df_resultado = processar_excel(
-                    caminho_excel,
-                    processo_yolo,
-                    processo_ocr,
-                )
+                with contextlib.redirect_stdout(io.StringIO()):
+                    df_resultado = processar_excel(
+                        caminho_excel,
+                        processo_yolo,
+                        processo_ocr,
+                    )
 
                 if (
                     df_resultado is not None
                     and not df_resultado.empty
                 ):
+                    origem = (
+                        str(caminho_excel.relative_to(caminho_entrada))
+                        if caminho_entrada.is_dir()
+                        else caminho_excel.name
+                    )
+                    df_resultado.insert(0, "Arquivo de Origem", origem)
 
                     todos_resultados.append(
                         df_resultado
@@ -3301,13 +3093,8 @@ def main():
 
             except Exception as erro:
 
-                print(
-                    "\n[ERRO NO ARQUIVO]"
-                )
-
-                print(
-                    f"{caminho_excel}: "
-                    f"{type(erro).__name__}: {erro}"
+                erros_arquivos.append(
+                    (str(caminho_excel), f"{type(erro).__name__}: {erro}")
                 )
 
         # ====================================================
@@ -3319,6 +3106,9 @@ def main():
             print(
                 "\n[ERRO] Nenhum resultado foi gerado."
             )
+
+            for caminho, mensagem in erros_arquivos:
+                print(f"[ERRO] {caminho}: {mensagem}")
 
             sys.exit(1)
 
@@ -3397,6 +3187,11 @@ def main():
             f"Saída única: "
             f"{caminho_saida.resolve()}"
         )
+
+        if erros_arquivos:
+            print("Arquivos com erro:")
+            for caminho, mensagem in erros_arquivos:
+                print(f"- {caminho}: {mensagem}")
 
         print(
             "=" * 75

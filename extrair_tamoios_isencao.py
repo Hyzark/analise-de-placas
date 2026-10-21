@@ -1,10 +1,26 @@
 from __future__ import annotations
+from placas import (
+    aplicar_mascara as _aplicar_mascara_comum,
+    descobrir_mascara as _descobrir_mascara_comum,
+    distancia_placas as _distancia_placas_comum,
+    distancia_ponderada as _distancia_ponderada,
+    normalizar_ocr as _normalizar_ocr_comum,
+    normalizar_placa as _normalizar_placa,
+    CONFUNDIVEIS as _CONFUNDIVEIS,
+    MAPA_LETRAS as MAPA_LETRAS,
+    MAPA_DIGITOS as MAPA_DIGITOS,
+)
+
+from common import enviar_json
 
 import functools
+import contextlib
+import io
 import json
 import re
 import subprocess
 import sys
+import tempfile
 import time
 import unicodedata
 from pathlib import Path
@@ -19,8 +35,7 @@ from tqdm import tqdm
 
 from config import (
     BASE_DIR,
-    DOWNLOADS_DIR,
-    OUTPUT_DIR,
+    caminho_resultado,
     PYTHON_YOLO,
     PYTHON_OCR,
     DETECTOR_PY,
@@ -76,258 +91,42 @@ REGEX_ID_ARQUIVO = re.compile(
 # CONFUNDÍVEIS
 # ============================================================
 
-_CONFUNDIVEIS: set[tuple[str, str]] = {
-
-    ("0", "O"),
-    ("O", "0"),
-
-    ("1", "I"),
-    ("I", "1"),
-
-    ("1", "L"),
-    ("L", "1"),
-
-    ("T", "I"),
-    ("I", "T"),
-
-    ("2", "Z"),
-    ("Z", "2"),
-
-    ("Z", "7"),
-    ("7", "Z"),
-
-    ("4", "A"),
-    ("A", "4"),
-
-    ("5", "S"),
-    ("S", "5"),
-
-    ("6", "G"),
-    ("G", "6"),
-
-    ("8", "B"),
-    ("B", "8"),
-
-    ("B", "E"),
-    ("E", "B"),
-
-    ("D", "0"),
-    ("0", "D"),
-
-    ("D", "O"),
-    ("O", "D"),
-}
 
 
 # ============================================================
 # MAPA PARA LETRAS
 # ============================================================
 
-MAPA_LETRAS = {
-    "0": "O",
-    "1": "I",
-    "2": "Z",
-    "4": "A",
-    "5": "S",
-    "6": "G",
-    "7": "Z",
-    "8": "B",
-}
 
 
 # ============================================================
 # MAPA PARA DÍGITOS
 # ============================================================
 
-MAPA_DIGITOS = {
-    "O": "0",
-    "Q": "0",
-    "D": "0",
-
-    "I": "1",
-    "L": "1",
-    "T": "7",
-
-    "Z": "2",
-
-    "A": "4",
-
-    "S": "5",
-
-    "G": "6",
-
-    "B": "8",
-}
 
 
 # ============================================================
 # LEVENSHTEIN
 # ============================================================
 
-@functools.lru_cache(
-    maxsize=8192
-)
-def _levenshtein(
-    a: str,
-    b: str,
-) -> float:
-
-    anterior = list(
-        range(
-            len(b) + 1
-        )
-    )
-
-    for i, ca in enumerate(
-        a,
-        start=1,
-    ):
-
-        atual = [i]
-
-        for j, cb in enumerate(
-            b,
-            start=1,
-        ):
-
-            if ca == cb:
-
-                custo = 0.0
-
-            elif (
-                ca,
-                cb
-            ) in _CONFUNDIVEIS:
-
-                custo = 0.35
-
-            else:
-
-                custo = 1.0
-
-            atual.append(
-                min(
-                    anterior[j] + 1,
-                    atual[j - 1] + 1,
-                    anterior[j - 1] + custo,
-                )
-            )
-
-        anterior = atual
-
-    return anterior[-1]
+def _levenshtein(a: str, b: str) -> float:
+    return _distancia_ponderada(a, b, _CONFUNDIVEIS)
 
 
 # ============================================================
 # LIMPA TEXTO
 # ============================================================
 
-def limpar_texto(
-    texto,
-) -> str:
-
-    if texto is None:
-        return ""
-
-    return re.sub(
-        r"[^A-Z0-9]",
-        "",
-        str(texto).upper(),
-    )
+def limpar_texto(texto) -> str:
+    return _normalizar_placa(texto)
 
 
 # ============================================================
 # APLICA MÁSCARA LLLDLDD
 # ============================================================
 
-def aplicar_mascara_placa(
-    candidato,
-):
-
-    candidato = limpar_texto(
-        candidato
-    )
-
-    if len(candidato) != TAMANHO_PLACA:
-        return ""
-
-    resultado = []
-
-    for indice, char in enumerate(
-        candidato
-    ):
-
-        # ====================================================
-        # POSIÇÃO 5 — NUNCA ALTERAR
-        # ====================================================
-
-        if indice == 4:
-
-            resultado.append(
-                char
-            )
-
-            continue
-
-        tipo = MASCARA_PLACA[
-            indice
-        ]
-
-        # ====================================================
-        # POSIÇÃO DE LETRA
-        # ====================================================
-
-        if tipo == "L":
-
-            if char.isalpha():
-
-                resultado.append(
-                    char
-                )
-
-            elif char in MAPA_LETRAS:
-
-                resultado.append(
-                    MAPA_LETRAS[
-                        char
-                    ]
-                )
-
-            else:
-
-                resultado.append(
-                    char
-                )
-
-        # ====================================================
-        # POSIÇÃO DE DÍGITO
-        # ====================================================
-
-        else:
-
-            if char.isdigit():
-
-                resultado.append(
-                    char
-                )
-
-            elif char in MAPA_DIGITOS:
-
-                resultado.append(
-                    MAPA_DIGITOS[
-                        char
-                    ]
-                )
-
-            else:
-
-                resultado.append(
-                    char
-                )
-
-    return "".join(
-        resultado
-    )
+def aplicar_mascara_placa(candidato):
+    return _aplicar_mascara_comum(candidato, MASCARA_PLACA, MAPA_LETRAS, MAPA_DIGITOS, tamanho=TAMANHO_PLACA, comprimento_invalido="vazio", preservar_indice=4)
 
 
 # ============================================================
@@ -591,27 +390,8 @@ def encontrar_melhor_trecho(
 # DISTÂNCIA
 # ============================================================
 
-def distancia_placas(
-    placa_a: str,
-    placa_b: str,
-) -> float:
-
-    a = limpar_texto(
-        placa_a
-    )
-
-    b = limpar_texto(
-        placa_b
-    )
-
-    if not a or not b:
-
-        return 999.0
-
-    return _levenshtein(
-        a,
-        b,
-    )
+def distancia_placas(placa_a: str, placa_b: str) -> float:
+    return _distancia_placas_comum(placa_a, placa_b, _CONFUNDIVEIS)
 
 
 # ============================================================
@@ -942,27 +722,6 @@ def normalizar_coluna(
 # ENVIA JSON
 # ============================================================
 
-def enviar_json(
-    processo,
-    dados,
-):
-
-    if processo.poll() is not None:
-
-        raise RuntimeError(
-            "Processo já encerrou. "
-            f"Código: {processo.returncode}"
-        )
-
-    processo.stdin.write(
-        json.dumps(
-            dados,
-            ensure_ascii=False,
-        )
-        + "\n"
-    )
-
-    processo.stdin.flush()
 
 
 # ============================================================
@@ -3253,31 +3012,38 @@ def main():
 
         sys.exit(1)
 
-    caminho_excel = Path(
-        caminho_excel
-    ).resolve()
+    caminho_entrada = Path(caminho_excel).resolve()
 
-    if not caminho_excel.exists():
+    if not caminho_entrada.exists():
 
         print(
             "[ERRO] "
             "Excel não encontrado:"
         )
 
-        print(
-            caminho_excel
-        )
+        print(caminho_entrada)
 
         sys.exit(1)
 
-    if not caminho_excel.is_file():
-
-        print(
-            "[ERRO] "
-            "O caminho informado para o Excel "
-            "não é um arquivo."
+    recursivo = "--recursivo" in sys.argv
+    if caminho_entrada.is_dir():
+        iterator = caminho_entrada.rglob("*.xlsx") if recursivo else caminho_entrada.glob("*.xlsx")
+        arquivos_excel = sorted(
+            (
+                p for p in iterator
+                if not p.name.startswith("~$")
+                and not p.stem.endswith(("_analisado", "_validado", "_resultado"))
+            ),
+            key=lambda p: str(p).lower(),
         )
+    elif caminho_entrada.is_file() and caminho_entrada.suffix.lower() == ".xlsx":
+        arquivos_excel = [caminho_entrada]
+    else:
+        print("[ERRO] Informe um arquivo .xlsx ou uma pasta com arquivos Excel.")
+        sys.exit(1)
 
+    if not arquivos_excel:
+        print("[ERRO] Nenhum arquivo .xlsx válido foi encontrado.")
         sys.exit(1)
 
     # ========================================================
@@ -3368,12 +3134,6 @@ def main():
     # SAÍDA
     # ========================================================
 
-    caminho_saida = ensure_parent(
-        OUTPUT_DIR
-        /
-        "resultado_tamoios.xlsx"
-    )
-
     # ========================================================
     # INICIA YOLO
     # ========================================================
@@ -3401,13 +3161,65 @@ def main():
         # PROCESSAMENTO
         # ====================================================
 
-        processar_excel(
-            caminho_excel,
-            pasta_imagens,
-            caminho_saida,
-            processo_yolo,
-            processo_ocr,
-        )
+        resultados_completos = []
+        melhores_resultados = []
+        erros = []
+
+        with tempfile.TemporaryDirectory(prefix="tamoios_isencao_lote_") as pasta_temp:
+            for indice, arquivo_excel in enumerate(arquivos_excel, start=1):
+                print(f"[PROGRESSO] Excel {indice}/{len(arquivos_excel)}: {arquivo_excel.name}")
+                saida_temporaria = Path(pasta_temp) / f"resultado_{indice}.xlsx"
+                try:
+                    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                        df = processar_excel(
+                            arquivo_excel,
+                            pasta_imagens,
+                            saida_temporaria,
+                            processo_yolo,
+                            processo_ocr,
+                        )
+                    df_melhores = pd.read_excel(
+                        saida_temporaria,
+                        sheet_name="Melhor Resultado ID",
+                    )
+                    origem = (
+                        str(arquivo_excel.relative_to(caminho_entrada))
+                        if caminho_entrada.is_dir()
+                        else arquivo_excel.name
+                    )
+                    df.insert(0, "Arquivo de Origem", origem)
+                    df_melhores.insert(0, "Arquivo de Origem", origem)
+                    resultados_completos.append(df)
+                    melhores_resultados.append(df_melhores)
+                except Exception as erro:
+                    erros.append((arquivo_excel.name, f"{type(erro).__name__}: {erro}"))
+
+        caminho_saida = None
+        if resultados_completos:
+            caminho_saida = caminho_resultado("tamoios_isencao", "resultado_tamoios.xlsx")
+            df_completo = pd.concat(resultados_completos, ignore_index=True)
+            df_melhores = pd.concat(melhores_resultados, ignore_index=True)
+            with pd.ExcelWriter(caminho_saida, engine="openpyxl") as writer:
+                df_completo.to_excel(writer, sheet_name="Resultado Completo", index=False)
+                df_melhores.to_excel(writer, sheet_name="Melhor Resultado ID", index=False)
+
+            aprovados = int((df_completo.get("Status OCR", pd.Series(dtype=str)) == "Aprovado - busca nas imagens").sum())
+            revisar = int((df_completo.get("Status OCR", pd.Series(dtype=str)) == "Revisar").sum())
+            print("\n" + "=" * 75)
+            print("RESULTADO FINAL - TAMOIOS ISENÇÃO")
+            print("=" * 75)
+            print(f"Planilhas processadas: {len(resultados_completos)} de {len(arquivos_excel)}")
+            print(f"Registros: {len(df_completo)}")
+            print(f"Aprovados: {aprovados}")
+            print(f"Revisar: {revisar}")
+            print(f"Excel consolidado: {caminho_saida}")
+        else:
+            print("\n[ERRO] Nenhuma planilha foi processada com sucesso; não foi criado Excel.")
+
+        if erros:
+            print("\nArquivos com erro:")
+            for nome, mensagem in erros:
+                print(f"- {nome}: {mensagem}")
 
     except KeyboardInterrupt:
 

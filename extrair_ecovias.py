@@ -1,5 +1,20 @@
 from __future__ import annotations
 
+from config import caminho_resultado
+from placas import (
+    aplicar_mascara as _aplicar_mascara_comum,
+    descobrir_mascara as _descobrir_mascara_comum,
+    distancia_placas as _distancia_placas_comum,
+    distancia_ponderada as _distancia_ponderada,
+    normalizar_ocr as _normalizar_ocr_comum,
+    normalizar_placa as _normalizar_placa,
+    CONFUNDIVEIS as _CONFUNDIVEIS,
+    MAPA_LETRAS as _MAPA_LETRAS,
+    MAPA_DIGITOS as _MAPA_DIGITOS,
+)
+
+from common import escrever_json
+
 import functools
 import json
 import math
@@ -118,69 +133,27 @@ OUTPUT_FIELD_MAP = {
 # NORMALIZAÇÃO E COMPARAÇÃO DE PLACAS (implementação própria neste arquivo)
 # ============================================================================
 
-_CONFUNDIVEIS: set[tuple[str, str]] = {
-    ("0", "O"), ("O", "0"), ("1", "I"), ("I", "1"), ("1", "L"), ("L", "1"),
-    ("T", "I"), ("I", "T"), ("2", "Z"), ("Z", "2"), ("Z", "7"), ("7", "Z"),
-    ("4", "A"), ("A", "4"), ("5", "S"), ("S", "5"), ("6", "G"), ("G", "6"),
-    ("8", "B"), ("B", "8"), ("B", "E"), ("E", "B"), ("D", "0"), ("0", "D"),
-    ("D", "O"), ("O", "D"),
-}
-
-_MAPA_LETRAS = {"0": "O", "1": "I", "2": "Z", "4": "A", "5": "S", "6": "G", "7": "Z", "8": "B"}
-_MAPA_DIGITOS = {"O": "0", "Q": "0", "D": "0", "I": "1", "L": "1", "T": "7", "J": "1", "Z": "2", "A": "4", "S": "5", "G": "6", "B": "8", "E": "8", "U": "0"}
 
 
-@functools.lru_cache(maxsize=16384)
+
 def _levenshtein(a: str, b: str) -> float:
-    anterior = list(range(len(b) + 1))
-    for i, ca in enumerate(a, start=1):
-        atual = [i]
-        for j, cb in enumerate(b, start=1):
-            if ca == cb:
-                custo = 0.0
-            elif (ca, cb) in _CONFUNDIVEIS:
-                custo = 0.35
-            else:
-                custo = 1.0
-            atual.append(min(anterior[j] + 1, atual[j - 1] + 1, anterior[j - 1] + custo))
-        anterior = atual
-    return anterior[-1]
+    return _distancia_ponderada(a, b, _CONFUNDIVEIS)
 
 
 def limpar_texto(valor: Any) -> str:
-    if valor is None:
-        return ""
-    return re.sub(r"[^A-Z0-9]", "", str(valor).upper())
+    return _normalizar_placa(valor)
 
 
 def distancia_placas(placa_a: str, placa_b: str) -> float:
-    a = limpar_texto(placa_a)
-    b = limpar_texto(placa_b)
-    if not a or not b:
-        return 999.0
-    return _levenshtein(a, b)
+    return _distancia_placas_comum(placa_a, placa_b, _CONFUNDIVEIS)
 
 
 def descobrir_mascara(placa: str) -> str:
-    placa = limpar_texto(placa)
-    if len(placa) != TAMANHO_PLACA:
-        return "LLLDLDD"
-    if placa[4].isalpha():
-        return "LLLDLDD"
-    return "LLLDDDD"
+    return _descobrir_mascara_comum(placa, tamanho=TAMANHO_PLACA, mascara_invalida="LLLDLDD")
 
 
 def aplicar_mascara_placa(candidato: str, mascara: str) -> str:
-    candidato = limpar_texto(candidato)
-    if len(candidato) != TAMANHO_PLACA:
-        return candidato
-    resultado = []
-    for caractere, tipo in zip(candidato, mascara):
-        if tipo == "L":
-            resultado.append(_MAPA_LETRAS.get(caractere, caractere))
-        else:
-            resultado.append(_MAPA_DIGITOS.get(caractere, caractere))
-    return "".join(resultado)
+    return _aplicar_mascara_comum(candidato, mascara, _MAPA_LETRAS, _MAPA_DIGITOS, tamanho=TAMANHO_PLACA, comprimento_invalido="manter")
 
 
 def encontrar_melhor_trecho(placa_esperada: str, placa_ocr: str) -> tuple[str, float]:
@@ -546,7 +519,7 @@ def extrair_registros_pdf(caminho_pdf: Path, pasta_temporaria: Path, indice_pdf:
     return registros
 
 
-def localizar_pdfs(caminho_entrada: Path) -> list[Path]:
+def localizar_pdfs(caminho_entrada: Path, recursive: bool = False) -> list[Path]:
     if caminho_entrada.is_file():
         if caminho_entrada.suffix.lower() != ".pdf":
             raise ValueError("O arquivo informado não é um PDF.")
@@ -554,7 +527,8 @@ def localizar_pdfs(caminho_entrada: Path) -> list[Path]:
     if not caminho_entrada.is_dir():
         raise FileNotFoundError(f"Caminho não encontrado: {caminho_entrada}")
     arquivos = []
-    for arquivo in caminho_entrada.rglob("*"):
+    arquivos_pasta = caminho_entrada.rglob("*") if recursive else caminho_entrada.glob("*")
+    for arquivo in arquivos_pasta:
         if not arquivo.is_file() or arquivo.suffix.lower() != ".pdf":
             continue
         if arquivo.name.startswith("~$") or arquivo.name.startswith("."):
@@ -601,13 +575,14 @@ WORKER_LOG_HANDLES: dict[int, Any] = {}
 WORKER_LOG_PATHS: dict[int, Path] = {}
 
 
+
+
 def enviar_json(processo: subprocess.Popen, dados: dict[str, Any]) -> None:
     if processo.poll() is not None:
         raise RuntimeError(f"Processo já encerrou. Código: {processo.returncode}")
     if processo.stdin is None:
         raise RuntimeError("A entrada do processo não está disponível.")
-    processo.stdin.write(json.dumps(dados, ensure_ascii=False) + "\n")
-    processo.stdin.flush()
+    escrever_json(processo, dados)
 
 
 def ler_json(processo: subprocess.Popen, nome: str) -> dict[str, Any]:
@@ -879,7 +854,10 @@ def main() -> None:
         sys.exit(1)
     caminho_entrada = Path(entrada).expanduser().resolve()
     try:
-        arquivos_pdf = localizar_pdfs(caminho_entrada)
+        arquivos_pdf = localizar_pdfs(
+            caminho_entrada,
+            recursive="--recursivo" in sys.argv,
+        )
     except Exception as erro:
         print(f"[ERRO] {erro}")
         sys.exit(1)
@@ -894,8 +872,10 @@ def main() -> None:
         if not caminho.exists():
             raise FileNotFoundError(f"{descricao} não encontrado: {caminho}")
 
-    pasta_saida = caminho_entrada.parent if caminho_entrada.is_file() else caminho_entrada
-    caminho_saida = pasta_saida / "resultado_validacao_evasao_pedagio.xlsx"
+    caminho_saida = caminho_resultado(
+        "ecovias",
+        "resultado_validacao_evasao_pedagio.xlsx",
+    )
     pasta_temporaria = Path(tempfile.mkdtemp(prefix="validacao_evasao_pdf_"))
     pasta_workers = pasta_temporaria / "workers"
     pasta_workers.mkdir(parents=True, exist_ok=True)
@@ -917,7 +897,7 @@ def main() -> None:
             try:
                 registros = extrair_registros_pdf(caminho_pdf, pasta_temporaria, indice_pdf)
                 todos_registros.extend(registros)
-                print(f"  [OK] {len(registros)} página(s)/registro(s); {sum(len(r['imagens']) for r in registros)} foto(s) extraída(s).")
+                print(f"  [PROGRESSO] PDF {indice_pdf}/{len(arquivos_pdf)} concluído.")
             except Exception as erro:
                 erros_pdf.append((str(caminho_pdf), f"{type(erro).__name__}: {erro}"))
                 print(f"  [ERRO] {type(erro).__name__}: {erro}")

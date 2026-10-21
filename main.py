@@ -79,8 +79,9 @@ class Sistema:
     saida_junto      True quando o script salva o resultado na mesma pasta
                      do arquivo de entrada (necessário para realocar saídas
                      em modo de arquivo único com pasta temporária).
-    aceita_pasta     True quando ARQUIVO_STDIN pode receber uma pasta inteira
+    aceita_pasta     True quando o script recebe todos os arquivos da pasta
                      em uma única execução.
+    argumento_recursivo  Argumento opcional que solicita busca em subpastas.
     """
     chave          : str
     nome           : str
@@ -90,6 +91,7 @@ class Sistema:
     extensoes_img  : List[str] = field(default_factory=list)
     saida_junto    : bool = False
     aceita_pasta   : bool = False
+    argumento_recursivo: str = ""
 
 
 # ============================================================
@@ -104,7 +106,7 @@ SISTEMAS: list[Sistema] = [
         script        = "analises_fraudes.py",
         tipo_entrada  = TipoEntrada.PASTA_ARGV,
         extensoes     = [".xlsx"],
-        saida_junto   = True,
+        saida_junto   = False,
     ),
 
     Sistema(
@@ -131,7 +133,7 @@ SISTEMAS: list[Sistema] = [
         script        = "extrair_tamoios.py",
         tipo_entrada  = TipoEntrada.PASTA_ARGV,
         extensoes     = [".xlsx"],
-        saida_junto   = True,
+        saida_junto   = False,
     ),
 
     Sistema(
@@ -142,6 +144,8 @@ SISTEMAS: list[Sistema] = [
         extensoes     = [".xlsx"],
         extensoes_img = [".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"],
         saida_junto   = False,
+        aceita_pasta  = True,
+        argumento_recursivo = "--recursivo",
     ),
 
     Sistema(
@@ -150,7 +154,7 @@ SISTEMAS: list[Sistema] = [
         script        = "cnl_isencao_judicial.py",
         tipo_entrada  = TipoEntrada.ARQUIVO_STDIN,
         extensoes     = [".xlsx"],
-        saida_junto   = True,
+        saida_junto   = False,
 
         # O isencao_judicial.py aceita uma pasta inteira
         # e localiza os Excels internamente.
@@ -163,7 +167,36 @@ SISTEMAS: list[Sistema] = [
         script        = "via_colinas.py",
         tipo_entrada  = TipoEntrada.PASTA_ARGV,
         extensoes     = [".xlsx"],
-        saida_junto   = True,
+        saida_junto   = False,
+    ),
+
+    Sistema(
+        chave         = "8",
+        nome          = "Ecovias — Evasão de Pedágio",
+        script        = "extrair_ecovias.py",
+        tipo_entrada  = TipoEntrada.ARQUIVO_STDIN,
+        extensoes     = [".pdf"],
+        saida_junto   = False,
+        aceita_pasta  = True,
+        argumento_recursivo = "--recursivo",
+    ),
+
+    Sistema(
+        chave         = "9",
+        nome          = "SAU — Veículos Administrativos",
+        script        = "SAU/ler_imagem_administrativos.py",
+        tipo_entrada  = TipoEntrada.PASTA_ARGV,
+        extensoes     = [".jpg", ".jpeg", ".png"],
+        saida_junto   = False,
+    ),
+
+    Sistema(
+        chave         = "10",
+        nome          = "SAU — Veículos Operacionais",
+        script        = "SAU/ler_imagem_operacionais.py",
+        tipo_entrada  = TipoEntrada.PASTA_ARGV,
+        extensoes     = [".jpg", ".jpeg", ".png"],
+        saida_junto   = False,
     ),
 
 ]
@@ -426,13 +459,17 @@ def _realocar_saidas(
     print(f"\n  [INFO] Realocando saída(s) para: {destino}")
 
     for f in gerados:
-        alvo = destino / f.name
-
-        if alvo.exists():
-            alvo.unlink()
+        original = destino / f.name
+        alvo = original
+        indice = 2
+        while alvo.exists():
+            alvo = original.with_name(
+                f"{original.stem}{indice}{original.suffix}"
+            )
+            indice += 1
 
         shutil.move(str(f), str(alvo))
-        print(f"    ✓ {f.name}")
+        print(f"    ✓ {alvo.name}")
 
 
 # ============================================================
@@ -571,9 +608,10 @@ def _executar_arquivo_stdin(sistema: Sistema, modo: int) -> None:
     # ========================================================
 
     if sistema.aceita_pasta:
-
+        args = [sistema.argumento_recursivo] if modo == 3 and sistema.argumento_recursivo else []
         _executar(
             sistema,
+            args=args,
             stdin_data=f"{pasta}\n",
         )
 
@@ -695,6 +733,15 @@ def _executar_excel_pasta_stdin(sistema: Sistema, modo: int) -> None:
 
     if _ler("\n  Confirmar e iniciar? [s/n]: ").lower() != "s":
         print("  [INFO] Operação cancelada.")
+        return
+
+    if sistema.aceita_pasta:
+        args = [sistema.argumento_recursivo] if recursivo and sistema.argumento_recursivo else []
+        _executar(
+            sistema,
+            args=args,
+            stdin_data=f"{pasta_excels}\n{pasta_imgs}\n",
+        )
         return
 
     total = len(excels)
@@ -907,3 +954,5 @@ def _menu_principal() -> None:
 
 if __name__ == "__main__":
     _menu_principal()
+
+

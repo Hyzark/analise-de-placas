@@ -1,4 +1,17 @@
 from __future__ import annotations
+from placas import (
+    aplicar_mascara as _aplicar_mascara_comum,
+    descobrir_mascara as _descobrir_mascara_comum,
+    distancia_placas as _distancia_placas_comum,
+    distancia_ponderada as _distancia_ponderada,
+    normalizar_ocr as _normalizar_ocr_comum,
+    normalizar_placa as _normalizar_placa,
+    CONFUNDIVEIS as _CONFUNDIVEIS,
+    MAPA_LETRAS as _MAPA_LETRAS,
+    MAPA_DIGITOS as _MAPA_DIGITOS,
+)
+
+from common import escrever_json
 
 
 # ============================================================
@@ -53,7 +66,7 @@ from tqdm import tqdm
 
 from config import (
     BASE_DIR,
-    OUTPUT_DIR,
+    caminho_resultado,
     ensure_parent,
 )
 
@@ -95,7 +108,7 @@ BATCH_SIZE = 64
 
 MAX_DIFERENCAS_APROVACAO = 3
 
-NOME_ABA = "ENVIO DER"
+NOME_ABA = "Envio DER"
 
 LOGO_FILENAME = "image1.png"
 
@@ -152,197 +165,44 @@ _NS = {
 # CARACTERES CONFUNDÍVEIS
 # ============================================================
 
-_CONFUNDIVEIS = {
-    ("0", "O"),
-    ("O", "0"),
-
-    ("1", "I"),
-    ("I", "1"),
-
-    ("1", "L"),
-    ("L", "1"),
-
-    ("T", "I"),
-    ("I", "T"),
-
-    ("2", "Z"),
-    ("Z", "2"),
-
-    ("Z", "7"),
-    ("7", "Z"),
-
-    ("4", "A"),
-    ("A", "4"),
-
-    ("5", "S"),
-    ("S", "5"),
-
-    ("6", "G"),
-    ("G", "6"),
-
-    ("8", "B"),
-    ("B", "8"),
-
-    ("B", "E"),
-    ("E", "B"),
-
-    ("D", "0"),
-    ("0", "D"),
-
-    ("D", "O"),
-    ("O", "D"),
-}
 
 
 # ============================================================
 # MAPA DE LETRAS
 # ============================================================
 
-_MAPA_LETRAS = {
-    "0": "O",
-    "1": "I",
-    "2": "Z",
-    "4": "A",
-    "5": "S",
-    "6": "G",
-    "7": "Z",
-    "8": "B",
-}
 
 
 # ============================================================
 # MAPA DE DÍGITOS
 # ============================================================
 
-_MAPA_DIGITOS = {
-    "O": "0",
-    "Q": "0",
-    "D": "0",
-
-    "I": "1",
-    "L": "1",
-
-    "T": "7",
-    "J": "1",
-
-    "Z": "2",
-
-    "A": "4",
-
-    "S": "5",
-
-    "G": "6",
-
-    "B": "8",
-    "E": "8",
-
-    "U": "0",
-}
 
 
 # ============================================================
 # LEVENSHTEIN
 # ============================================================
 
-@functools.lru_cache(maxsize=16384)
-def _levenshtein(
-    a: str,
-    b: str,
-) -> float:
-
+def _levenshtein(a: str, b: str) -> float:
     if not a or not b:
         return 999.0
-
-    anterior = list(
-        range(
-            len(b) + 1
-        )
-    )
-
-    for i, ca in enumerate(
-        a,
-        start=1,
-    ):
-
-        atual = [i]
-
-        for j, cb in enumerate(
-            b,
-            start=1,
-        ):
-
-            if ca == cb:
-
-                custo = 0.0
-
-            elif (
-                ca,
-                cb
-            ) in _CONFUNDIVEIS:
-
-                custo = 0.35
-
-            else:
-
-                custo = 1.0
-
-            atual.append(
-                min(
-                    anterior[j] + 1.0,
-                    atual[j - 1] + 1.0,
-                    anterior[j - 1] + custo,
-                )
-            )
-
-        anterior = atual
-
-    return float(
-        anterior[-1]
-    )
+    return float(_distancia_ponderada(a, b, _CONFUNDIVEIS))
 
 
 # ============================================================
 # LIMPA TEXTO
 # ============================================================
 
-def _limpar_texto(
-    texto,
-) -> str:
-
-    if texto is None:
-        return ""
-
-    return re.sub(
-        r"[^A-Z0-9]",
-        "",
-        str(texto).upper(),
-    )
+def _limpar_texto(texto) -> str:
+    return _normalizar_placa(texto)
 
 
 # ============================================================
 # DISTÂNCIA
 # ============================================================
 
-def distancia_placas(
-    placa_a: str,
-    placa_b: str,
-) -> float:
-
-    a = _limpar_texto(
-        placa_a
-    )
-
-    b = _limpar_texto(
-        placa_b
-    )
-
-    if not a or not b:
-        return 999.0
-
-    return _levenshtein(
-        a,
-        b,
-    )
+def distancia_placas(placa_a: str, placa_b: str) -> float:
+    return _distancia_placas_comum(placa_a, placa_b, _CONFUNDIVEIS)
 
 
 # ============================================================
@@ -612,119 +472,16 @@ def _descrever_diferencas(
 # DESCOBRE MÁSCARA DA PLACA
 # ============================================================
 
-def descobrir_mascara(
-    placa,
-):
-
-    placa = _limpar_texto(
-        placa
-    )
-
-    if len(placa) != TAMANHO_PLACA:
-        return None
-
-    # ========================================================
-    # MERCOSUL
-    #
-    # ABC1D23
-    # LLLDLDD
-    # ========================================================
-
-    if placa[4].isalpha():
-
-        return "LLLDLDD"
-
-    # ========================================================
-    # MODELO ANTIGO
-    #
-    # ABC1234
-    # LLLDDDD
-    # ========================================================
-
-    return "LLLDDDD"
+def descobrir_mascara(placa):
+    return _descobrir_mascara_comum(placa, tamanho=TAMANHO_PLACA, mascara_invalida=None)
 
 
 # ============================================================
 # APLICA MÁSCARA
 # ============================================================
 
-def corrigir_mascara(
-    texto,
-    mascara,
-):
-
-    texto = _limpar_texto(
-        texto
-    )
-
-    if len(texto) != 7:
-        return ""
-
-    resultado = []
-
-    for indice, (char, esperado) in enumerate(
-        zip(texto, mascara)
-    ):
-
-        # ====================================================
-        # POSIÇÃO 5 — NUNCA ALTERAR
-        # ====================================================
-
-        if indice == 4:
-
-            resultado.append(
-                char
-            )
-
-            continue
-
-        if esperado == "L":
-
-            if char.isalpha():
-
-                resultado.append(
-                    char
-                )
-
-            elif char in _MAPA_LETRAS:
-
-                resultado.append(
-                    _MAPA_LETRAS[
-                        char
-                    ]
-                )
-
-            else:
-
-                resultado.append(
-                    char
-                )
-
-        else:
-
-            if char.isdigit():
-
-                resultado.append(
-                    char
-                )
-
-            elif char in _MAPA_DIGITOS:
-
-                resultado.append(
-                    _MAPA_DIGITOS[
-                        char
-                    ]
-                )
-
-            else:
-
-                resultado.append(
-                    char
-                )
-
-    return "".join(
-        resultado
-    )
+def corrigir_mascara(texto, mascara):
+    return _aplicar_mascara_comum(texto, mascara, _MAPA_LETRAS, _MAPA_DIGITOS, tamanho=TAMANHO_PLACA, comprimento_invalido="vazio", preservar_indice=4)
 
 
 # ============================================================
@@ -733,52 +490,8 @@ def corrigir_mascara(
 # Preserva a lógica antiga do SPVIAS.
 # ============================================================
 
-def normalizar_ocr(
-    texto,
-):
-
-    texto = _limpar_texto(
-        texto
-    )
-
-    if not texto:
-        return ""
-
-    # ========================================================
-    # MOTO ANTIGA
-    # 1234ABC
-    # → ABC1234
-    # ========================================================
-
-    if re.fullmatch(
-        r"\d{4}[A-Z]{3}",
-        texto,
-    ):
-
-        texto = (
-            texto[4:]
-            +
-            texto[:4]
-        )
-
-    # ========================================================
-    # MOTO MERCOSUL
-    # 1A23BCD
-    # → BCD1A23
-    # ========================================================
-
-    elif re.fullmatch(
-        r"\d[A-Z]\d{2}[A-Z]{3}",
-        texto,
-    ):
-
-        texto = (
-            texto[4:]
-            +
-            texto[:4]
-        )
-
-    return texto
+def normalizar_ocr(texto):
+    return _normalizar_ocr_comum(texto, reordenar_formatos=True)
 
 
 # ============================================================
@@ -1458,39 +1171,22 @@ def _converter_vetor_para_png(
 # COMUNICAÇÃO
 # ============================================================
 
+
+
 def enviar_json(
     processo,
     dados,
 ):
-
     if processo is None:
-
-        raise RuntimeError(
-            "Processo inexistente."
-        )
-
+        raise RuntimeError("Processo inexistente.")
     if processo.poll() is not None:
-
         raise RuntimeError(
             "Processo já encerrou. "
             f"Código={processo.returncode}"
         )
-
     if processo.stdin is None:
-
-        raise RuntimeError(
-            "stdin indisponível."
-        )
-
-    processo.stdin.write(
-        json.dumps(
-            dados,
-            ensure_ascii=False,
-        )
-        + "\n"
-    )
-
-    processo.stdin.flush()
+        raise RuntimeError("stdin indisponível.")
+    escrever_json(processo, dados)
 
 
 def ler_json(
@@ -4698,11 +4394,7 @@ def main():
     # SAÍDA
     # ========================================================
 
-    saida = ensure_parent(
-        OUTPUT_DIR
-        /
-        "resultado_spvias.xlsx"
-    )
+    saida = caminho_resultado("spvias", "resultado_spvias.xlsx")
 
     # ========================================================
     # IMAGEMAGICK

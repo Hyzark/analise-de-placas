@@ -1,5 +1,20 @@
 from __future__ import annotations
 
+from config import caminho_resultado
+from placas import (
+    aplicar_mascara as _aplicar_mascara_comum,
+    descobrir_mascara as _descobrir_mascara_comum,
+    distancia_placas as _distancia_placas_comum,
+    distancia_ponderada as _distancia_ponderada,
+    normalizar_ocr as _normalizar_ocr_comum,
+    normalizar_placa as _normalizar_placa,
+    CONFUNDIVEIS as CONFUNDIVEIS,
+    MAPA_LETRAS as MAPA_LETRAS,
+    MAPA_DIGITOS as MAPA_DIGITOS,
+)
+
+from common import enviar_json, extrair_bytes_imagem
+
 import sys
 import json
 import re
@@ -95,259 +110,41 @@ def normalizar_nome_coluna(nome):
 # ============================================================
 
 def limpar_placa(texto):
-
-    return re.sub(
-        r"[^A-Z0-9]",
-        "",
-        str(texto or "").upper(),
-    )
+    return _normalizar_placa(texto)
 
 
 # ============================================================
 # CONFUNDÍVEIS
 # ============================================================
 
-CONFUNDIVEIS = {
-    ("0", "O"),
-    ("O", "0"),
-
-    ("1", "I"),
-    ("I", "1"),
-
-    ("1", "L"),
-    ("L", "1"),
-
-    ("T", "I"),
-    ("I", "T"),
-
-    ("2", "Z"),
-    ("Z", "2"),
-
-    ("Z", "7"),
-    ("7", "Z"),
-
-    ("4", "A"),
-    ("A", "4"),
-
-    ("5", "S"),
-    ("S", "5"),
-
-    ("6", "G"),
-    ("G", "6"),
-
-    ("8", "B"),
-    ("B", "8"),
-
-    ("B", "E"),
-    ("E", "B"),
-
-    ("D", "0"),
-    ("0", "D"),
-
-    ("D", "O"),
-    ("O", "D"),
-}
 
 
 # ============================================================
 # MAPA PARA POSIÇÕES DE LETRAS
 # ============================================================
 
-MAPA_LETRAS = {
-    "0": "O",
-    "1": "I",
-    "2": "Z",
-    "4": "A",
-    "5": "S",
-    "6": "G",
-    "7": "Z",
-    "8": "B",
-}
 
 
 # ============================================================
 # MAPA PARA POSIÇÕES DE DÍGITOS
 # ============================================================
 
-MAPA_DIGITOS = {
-    "O": "0",
-    "Q": "0",
-    "D": "0",
-
-    "I": "1",
-    "L": "1",
-    "T": "7",
-
-    "Z": "2",
-
-    "A": "4",
-
-    "S": "5",
-
-    "G": "6",
-
-    "B": "8",
-}
 
 
 # ============================================================
 # APLICA MÁSCARA LLLDLDD
 # ============================================================
 
-def aplicar_mascara_placa(
-    candidato,
-):
-
-    candidato = limpar_placa(
-        candidato
-    )
-
-    if len(candidato) != TAMANHO_PLACA:
-        return ""
-
-    resultado = []
-
-    for indice, char in enumerate(
-        candidato
-    ):
-
-        # ====================================================
-        # POSIÇÃO 5 — NUNCA ALTERAR
-        # ====================================================
-
-        if indice == 4:
-
-            resultado.append(
-                char
-            )
-
-            continue
-
-        tipo = MASCARA_PLACA[
-            indice
-        ]
-
-        # ====================================================
-        # POSIÇÃO DE LETRA
-        # ====================================================
-
-        if tipo == "L":
-
-            if char.isalpha():
-
-                resultado.append(
-                    char
-                )
-
-            elif char in MAPA_LETRAS:
-
-                resultado.append(
-                    MAPA_LETRAS[
-                        char
-                    ]
-                )
-
-            else:
-
-                resultado.append(
-                    char
-                )
-
-        # ====================================================
-        # POSIÇÃO DE DÍGITO
-        # ====================================================
-
-        else:
-
-            if char.isdigit():
-
-                resultado.append(
-                    char
-                )
-
-            elif char in MAPA_DIGITOS:
-
-                resultado.append(
-                    MAPA_DIGITOS[
-                        char
-                    ]
-                )
-
-            else:
-
-                resultado.append(
-                    char
-                )
-
-    return "".join(
-        resultado
-    )
+def aplicar_mascara_placa(candidato):
+    return _aplicar_mascara_comum(candidato, MASCARA_PLACA, MAPA_LETRAS, MAPA_DIGITOS, tamanho=TAMANHO_PLACA, comprimento_invalido="vazio", preservar_indice=4)
 
 
 # ============================================================
 # LEVENSHTEIN
 # ============================================================
 
-def distancia_placas(
-    a,
-    b,
-):
-
-    a = limpar_placa(
-        a
-    )
-
-    b = limpar_placa(
-        b
-    )
-
-    if not a or not b:
-        return 999.0
-
-    anterior = list(
-        range(
-            len(b) + 1
-        )
-    )
-
-    for i, ca in enumerate(
-        a,
-        start=1,
-    ):
-
-        atual = [i]
-
-        for j, cb in enumerate(
-            b,
-            start=1,
-        ):
-
-            if ca == cb:
-
-                custo = 0.0
-
-            elif (
-                ca,
-                cb,
-            ) in CONFUNDIVEIS:
-
-                custo = 0.35
-
-            else:
-
-                custo = 1.0
-
-            atual.append(
-                min(
-                    anterior[j] + 1,
-                    atual[j - 1] + 1,
-                    anterior[j - 1] + custo,
-                )
-            )
-
-        anterior = atual
-
-    return anterior[-1]
+def distancia_placas(a, b):
+    return _distancia_placas_comum(a, b, CONFUNDIVEIS)
 
 
 # ============================================================
@@ -1026,27 +823,6 @@ def mostrar_progresso(
 # COMUNICAÇÃO
 # ============================================================
 
-def enviar_json(
-    processo,
-    dados,
-):
-
-    if processo.poll() is not None:
-
-        raise RuntimeError(
-            f"Processo já encerrou. "
-            f"Código: {processo.returncode}"
-        )
-
-    processo.stdin.write(
-        json.dumps(
-            dados,
-            ensure_ascii=False,
-        )
-        + "\n"
-    )
-
-    processo.stdin.flush()
 
 
 def ler_json(
@@ -1228,15 +1004,6 @@ def encontrar_coluna(
 # EXTRAI IMAGEM
 # ============================================================
 
-def extrair_bytes_imagem(img):
-
-    try:
-
-        return img._data()
-
-    except Exception:
-
-        return None
 
 
 # ============================================================
@@ -2565,6 +2332,7 @@ def processar_pasta(
     total_imagens = 0
     total_yolo = 0
     total_ocr = 0
+    todos_resultados = []
 
     arquivos_ok = 0
     arquivos_erro = 0
@@ -2623,16 +2391,7 @@ def processar_pasta(
                 df = pd.DataFrame(
                     resultados
                 )
-
-                saida = (
-                    excel_path.parent
-                    /
-                    (
-                        excel_path.stem
-                        +
-                        "_validado.xlsx"
-                    )
-                )
+                df.insert(0, "Arquivo de Origem", str(excel_path.relative_to(pasta)))
 
                 # =================================================
                 # DADOS ORIGINAIS
@@ -2791,14 +2550,7 @@ def processar_pasta(
                     outras_colunas
                 ]
 
-                # =================================================
-                # SALVA
-                # =================================================
-
-                df.to_excel(
-                    saida,
-                    index=False,
-                )
+                todos_resultados.append(df)
 
                 qtd = len(
                     df
@@ -2873,32 +2625,7 @@ def processar_pasta(
 
                 arquivos_ok += 1
 
-                print(
-                    "\n[OK]"
-                )
-
-                print(
-                    f"Passagens: {qtd}"
-                )
-
-                print(
-                    f"Aprovados: "
-                    f"{aprovados}"
-                )
-
-                print(
-                    f"Sem detecção: "
-                    f"{sem_deteccao}"
-                )
-
-                print(
-                    f"Revisar: "
-                    f"{revisar}"
-                )
-
-                print(
-                    f"Saída: {saida}"
-                )
+                print(f"[PROGRESSO] Arquivo {arquivo_idx}/{len(arquivos)} concluído.")
 
             except Exception as e:
 
@@ -2925,6 +2652,11 @@ def processar_pasta(
     # ========================================================
     # RESUMO
     # ========================================================
+
+    saida = None
+    if todos_resultados:
+        saida = caminho_resultado("tamoios", "resultado_tamoios.xlsx")
+        pd.concat(todos_resultados, ignore_index=True).to_excel(saida, index=False)
 
     tempo_total = (
         time.time()
@@ -3040,6 +2772,9 @@ def processar_pasta(
         f"{minutos:02d}:"
         f"{segundos:02d}"
     )
+
+    if saida is not None:
+        print(f"Excel consolidado......: {saida}")
 
     print(
         "=" * 75

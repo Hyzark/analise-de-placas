@@ -1,4 +1,17 @@
 from __future__ import annotations
+from placas import (
+    aplicar_mascara as _aplicar_mascara_comum,
+    descobrir_mascara as _descobrir_mascara_comum,
+    distancia_placas as _distancia_placas_comum,
+    distancia_ponderada as _distancia_ponderada,
+    normalizar_ocr as _normalizar_ocr_comum,
+    normalizar_placa as _normalizar_placa,
+    CONFUNDIVEIS as _CONFUNDIVEIS,
+    MAPA_LETRAS as _MAPA_LETRAS,
+    MAPA_DIGITOS as _MAPA_DIGITOS,
+)
+
+from common import enviar_json
 
 import functools
 import json
@@ -22,8 +35,7 @@ from tqdm import tqdm
 
 from config import (
     BASE_DIR,
-    DOWNLOADS_DIR,
-    OUTPUT_DIR,
+    caminho_resultado,
     PYTHON_YOLO,
     PYTHON_OCR,
     DETECTOR_PY,
@@ -31,7 +43,6 @@ from config import (
     BATCH_SIZE,
     QTD_IMAGENS_POR_PASSAGEM,
     MAX_DIFERENCAS_APROVACAO,
-    ensure_parent,
 )
 
 
@@ -54,33 +65,7 @@ TAMANHO_PLACA = 7
 # MAPAS DE CORREÇÃO POR POSIÇÃO
 # ============================================================
 
-_MAPA_LETRAS = {
-    "0": "O",
-    "1": "I",
-    "2": "Z",
-    "4": "A",
-    "5": "S",
-    "6": "G",
-    "7": "Z",
-    "8": "B",
-}
 
-_MAPA_DIGITOS = {
-    "O": "0",
-    "Q": "0",
-    "D": "0",
-    "I": "1",
-    "L": "1",
-    "T": "7",
-    "J": "1",
-    "Z": "2",
-    "A": "4",
-    "S": "5",
-    "G": "6",
-    "B": "8",
-    "E": "8",
-    "U": "0",
-}
 
 
 # ============================================================
@@ -127,185 +112,38 @@ def _encontrar_imagemagick():
 # LEVENSHTEIN
 # ============================================================
 
-_CONFUNDIVEIS = {
-    ("0", "O"),
-    ("O", "0"),
-    ("1", "I"),
-    ("I", "1"),
-    ("1", "L"),
-    ("L", "1"),
-    ("T", "I"),
-    ("I", "T"),
-    ("2", "Z"),
-    ("Z", "2"),
-    ("Z", "7"),
-    ("7", "Z"),
-    ("4", "A"),
-    ("A", "4"),
-    ("5", "S"),
-    ("S", "5"),
-    ("6", "G"),
-    ("G", "6"),
-    ("8", "B"),
-    ("B", "8"),
-    ("B", "E"),
-    ("E", "B"),
-    ("D", "0"),
-    ("0", "D"),
-    ("D", "O"),
-    ("O", "D"),
-}
 
 
-@functools.lru_cache(maxsize=8192)
-def _levenshtein(
-    a: str,
-    b: str,
-) -> float:
-    anterior = list(
-        range(len(b) + 1)
-    )
-
-    for i, ca in enumerate(
-        a,
-        start=1,
-    ):
-        atual = [i]
-
-        for j, cb in enumerate(
-            b,
-            start=1,
-        ):
-            if ca == cb:
-                custo = 0.0
-
-            elif (
-                ca,
-                cb,
-            ) in _CONFUNDIVEIS:
-                custo = 0.35
-
-            else:
-                custo = 1.0
-
-            atual.append(
-                min(
-                    anterior[j] + 1,
-                    atual[j - 1] + 1,
-                    anterior[j - 1] + custo,
-                )
-            )
-
-        anterior = atual
-
-    return anterior[-1]
+def _levenshtein(a: str, b: str) -> float:
+    return _distancia_ponderada(a, b, _CONFUNDIVEIS)
 
 
-def distancia_placas(
-    placa_a: str,
-    placa_b: str,
-) -> float:
-    a = re.sub(
-        r"[^A-Z0-9]",
-        "",
-        str(placa_a or "").upper(),
-    )
-
-    b = re.sub(
-        r"[^A-Z0-9]",
-        "",
-        str(placa_b or "").upper(),
-    )
-
-    if not a or not b:
-        return 999.0
-
-    return _levenshtein(
-        a,
-        b,
-    )
+def distancia_placas(placa_a: str, placa_b: str) -> float:
+    return _distancia_placas_comum(placa_a, placa_b, _CONFUNDIVEIS)
 
 
 # ============================================================
 # DESCOBRE MÁSCARA DA PLACA
 # ============================================================
 
-def descobrir_mascara(
-    placa: str,
-) -> str:
-    placa = re.sub(
-        r"[^A-Z0-9]",
-        "",
-        str(placa or "").upper(),
-    )
-
-    if len(placa) != 7:
-        return "LLLDLDD"
-
-    # Mercosul
-    # LLLDLDD
-    if placa[4].isalpha():
-        return "LLLDLDD"
-
-    # Antiga
-    # LLLDDDD
-    return "LLLDDDD"
+def descobrir_mascara(placa: str) -> str:
+    return _descobrir_mascara_comum(placa, tamanho=TAMANHO_PLACA, mascara_invalida="LLLDLDD")
 
 
 # ============================================================
 # APLICA MÁSCARA
 # ============================================================
 
-def aplicar_mascara_placa(
-    candidato: str,
-    mascara: str,
-) -> str:
-    candidato = re.sub(
-        r"[^A-Z0-9]",
-        "",
-        str(candidato or "").upper(),
-    )
-
-    if len(candidato) != 7:
-        return candidato
-
-    resultado = []
-
-    for caractere, tipo in zip(
-        candidato,
-        mascara,
-    ):
-        if tipo == "L":
-            resultado.append(
-                _MAPA_LETRAS.get(
-                    caractere,
-                    caractere,
-                )
-            )
-
-        else:
-            resultado.append(
-                _MAPA_DIGITOS.get(
-                    caractere,
-                    caractere,
-                )
-            )
-
-    return "".join(resultado)
+def aplicar_mascara_placa(candidato: str, mascara: str) -> str:
+    return _aplicar_mascara_comum(candidato, mascara, _MAPA_LETRAS, _MAPA_DIGITOS, tamanho=TAMANHO_PLACA, comprimento_invalido="manter")
 
 
 # ============================================================
 # NORMALIZA OCR
 # ============================================================
 
-def normalizar_ocr(
-    texto: str,
-) -> str:
-    return re.sub(
-        r"[^A-Z0-9]",
-        "",
-        str(texto or "").upper(),
-    )
+def normalizar_ocr(texto: str) -> str:
+    return _normalizar_placa(texto)
 
 
 # ============================================================
@@ -694,25 +532,6 @@ def normalizar_data_hora(
 # COMUNICAÇÃO
 # ============================================================
 
-def enviar_json(
-    processo,
-    dados,
-):
-    if processo.poll() is not None:
-        raise RuntimeError(
-            "Processo já encerrou. "
-            f"Código: {processo.returncode}"
-        )
-
-    processo.stdin.write(
-        json.dumps(
-            dados,
-            ensure_ascii=False,
-        )
-        + "\n"
-    )
-
-    processo.stdin.flush()
 
 
 def ler_json(
@@ -1953,11 +1772,7 @@ def processar_pdf(
         pdf_path
     )
 
-    print(
-        f"[PDF] "
-        f"Passagens encontradas: "
-        f"{len(passagens)}"
-    )
+    print("[PROGRESSO] Extração do PDF concluída; iniciando a análise das imagens.")
 
     if not passagens:
         print(
@@ -2429,6 +2244,7 @@ def processar_pasta(
         total_yolo_enviadas = 0
         total_yolo_detectadas = 0
         total_ocr = 0
+        todos_resultados = []
 
         tempo_inicio_total = (
             time.perf_counter()
@@ -2477,25 +2293,8 @@ def processar_pasta(
                 df, metricas = (
                     resultado_processamento
                 )
-
-                # =================================================
-                # NOME DA SAÍDA
-                # =================================================
-
-                nome_saida = (
-                    pdf_path.stem
-                    + "_resultado.xlsx"
-                )
-
-                saida = (
-                    pdf_path.parent
-                    / nome_saida
-                )
-
-                df.to_excel(
-                    saida,
-                    index=False
-                )
+                df.insert(0, "Arquivo de Origem", str(pdf_path.relative_to(pasta)))
+                todos_resultados.append(df)
 
                 # =================================================
                 # ESTATÍSTICAS
@@ -2547,50 +2346,7 @@ def processar_pasta(
 
                 arquivos_ok += 1
 
-                print(
-                    "\n[OK] "
-                    f"{pdf_path.name}"
-                )
-
-                print(
-                    f"Passagens: "
-                    f"{qtd}"
-                )
-
-                print(
-                    f"Aprovados: "
-                    f"{aprovados}"
-                )
-
-                print(
-                    f"Revisar: "
-                    f"{revisar}"
-                )
-
-                print(
-                    f"Imagens enviadas ao YOLO: "
-                    f"{metricas['total_yolo_enviadas']}"
-                )
-
-                print(
-                    f"Detecções YOLO: "
-                    f"{metricas['total_yolo_detectadas']}"
-                )
-
-                print(
-                    f"OCRs processados: "
-                    f"{metricas['total_ocr']}"
-                )
-
-                print(
-                    f"Tempo do PDF: "
-                    f"{metricas['tempo']:.2f}s"
-                )
-
-                print(
-                    f"Saída: "
-                    f"{saida}"
-                )
+                print(f"[PROGRESSO] PDF {indice}/{len(arquivos)} concluído.")
 
             except KeyboardInterrupt:
                 raise
@@ -2622,6 +2378,11 @@ def processar_pasta(
     # ========================================================
     # RESUMO
     # ========================================================
+
+    saida = None
+    if todos_resultados:
+        saida = caminho_resultado("autoban", "resultado_autoban.xlsx")
+        pd.concat(todos_resultados, ignore_index=True).to_excel(saida, index=False)
 
     tempo_total = (
         time.perf_counter()
@@ -2706,6 +2467,9 @@ def processar_pasta(
         f"{tempo_total:.2f}s"
     )
 
+    if saida is not None:
+        print(f"Excel consolidado: {saida}")
+
     print(
         "=" * 75
     )
@@ -2721,14 +2485,13 @@ def main():
     # ========================================================
 
     if len(sys.argv) < 2:
-        pasta = (
-            DOWNLOADS_DIR
-        )
-
+        texto_pasta = input("Informe a pasta que contém os PDFs: ").strip().strip('"')
+        if not texto_pasta:
+            print("[ERRO] Informe o caminho da pasta de PDFs.")
+            sys.exit(1)
+        pasta = Path(texto_pasta).expanduser().resolve()
     else:
-        pasta = Path(
-            sys.argv[1]
-        ).resolve()
+        pasta = Path(sys.argv[1]).expanduser().resolve()
 
     # ========================================================
     # VALIDA
@@ -2756,11 +2519,7 @@ def main():
     # SAÍDA
     # ========================================================
 
-    saida = ensure_parent(
-        OUTPUT_DIR
-        /
-        "resultado_autoban.xlsx"
-    )
+    saida = caminho_resultado("autoban", "resultado_autoban.xlsx")
 
     # ========================================================
     # INFORMAÇÃO SOBRE CONVERSOR

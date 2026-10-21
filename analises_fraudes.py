@@ -1,3 +1,4 @@
+from common import enviar_json, extrair_bytes_imagem
 import sys
 import json
 import re
@@ -11,6 +12,7 @@ import pandas as pd
 
 from config import (
     BASE_DIR,
+    caminho_resultado,
     PYTHON_YOLO,
     PYTHON_OCR,
     DETECTOR_PY,
@@ -111,28 +113,6 @@ def classificar_legibilidade(
 # JSON
 # ============================================================
 
-def enviar_json(
-    processo,
-    dados
-):
-
-    if processo.poll() is not None:
-
-        raise RuntimeError(
-            "Processo já encerrou. "
-            f"Código: "
-            f"{processo.returncode}"
-        )
-
-    processo.stdin.write(
-        json.dumps(
-            dados,
-            ensure_ascii=False
-        )
-        + "\n"
-    )
-
-    processo.stdin.flush()
 
 
 def ler_json(
@@ -309,15 +289,6 @@ def normalizar_coluna(
 # EXTRAI BYTES DA IMAGEM
 # ============================================================
 
-def extrair_bytes_imagem(
-    img
-):
-
-    try:
-        return img._data()
-
-    except Exception:
-        return None
 
 
 # ============================================================
@@ -1275,16 +1246,6 @@ def processar_excel(
                 ]
             )
 
-        print(
-            f"[PASSAGENS] "
-            f"{len(passagens)}"
-        )
-
-        print(
-            f"[IMAGENS] "
-            f"{len(todas_imagens)}"
-        )
-
         todos_yolo = {}
 
         todos_ocr = {}
@@ -1596,6 +1557,7 @@ def processar_pasta(
         total_parciais = 0
         total_ilegiveis = 0
         total_sem_imagem = 0
+        todos_resultados = []
 
         for indice, excel_path in enumerate(
             arquivos,
@@ -1634,24 +1596,8 @@ def processar_pasta(
                 df = pd.DataFrame(
                     resultados
                 )
-
-                # =================================================
-                # SAÍDA
-                # =================================================
-
-                saida = (
-                    excel_path.parent
-                    /
-                    (
-                        excel_path.stem
-                        + "_analisado.xlsx"
-                    )
-                )
-
-                df.to_excel(
-                    saida,
-                    index=False
-                )
+                df.insert(0, "Arquivo de Origem", str(excel_path.relative_to(pasta)))
+                todos_resultados.append(df)
 
                 # =================================================
                 # ESTATÍSTICAS
@@ -1713,40 +1659,7 @@ def processar_pasta(
                     sem_imagem
                 )
 
-                print(
-                    "\n[OK] "
-                    "Arquivo finalizado."
-                )
-
-                print(
-                    f"Passagens: "
-                    f"{len(df)}"
-                )
-
-                print(
-                    f"Legíveis: "
-                    f"{legiveis}"
-                )
-
-                print(
-                    f"Parciais: "
-                    f"{parciais}"
-                )
-
-                print(
-                    f"Ilegíveis: "
-                    f"{ilegiveis}"
-                )
-
-                print(
-                    f"Sem imagem: "
-                    f"{sem_imagem}"
-                )
-
-                print(
-                    f"Saída: "
-                    f"{saida}"
-                )
+                print(f"[PROGRESSO] Arquivo {indice}/{len(arquivos)} concluído.")
 
             except KeyboardInterrupt:
 
@@ -1775,6 +1688,11 @@ def processar_pasta(
     # ========================================================
     # RESUMO FINAL
     # ========================================================
+
+    saida = None
+    if todos_resultados:
+        saida = caminho_resultado("fraudes", "resultado_fraudes.xlsx")
+        pd.concat(todos_resultados, ignore_index=True).to_excel(saida, index=False)
 
     print(
         "\n"
@@ -1813,6 +1731,9 @@ def processar_pasta(
         f"SEM IMAGEM: "
         f"{total_sem_imagem}"
     )
+
+    if saida is not None:
+        print(f"Excel consolidado: {saida}")
 
     print(
         "=" * 75

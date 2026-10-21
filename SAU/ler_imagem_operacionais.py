@@ -2225,7 +2225,7 @@ def main():
         [
             arquivo
             for arquivo in (
-                pasta_imagens.iterdir()
+                pasta_imagens.rglob("*")
             )
             if (
                 arquivo.is_file()
@@ -2239,7 +2239,7 @@ def main():
             )
         ],
         key=lambda p:
-            p.name.lower()
+            str(p.relative_to(pasta_imagens)).lower()
     )
 
     total_arquivos = len(
@@ -2739,3 +2739,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

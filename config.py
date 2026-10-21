@@ -85,81 +85,10 @@ SR_MODEL = (
 
 
 # ============================================================
-# DIRETÓRIOS DE ENTRADA
+# SAÍDA
 # ============================================================
 
-DOWNLOADS_DIR = (
-    BASE_DIR
-    / "downloads"
-)
-
-
-PDF_DIR = (
-    DOWNLOADS_DIR
-    / "pdf"
-)
-
-
-EXCEL_DIR = (
-    DOWNLOADS_DIR
-    / "excel"
-)
-
-
-IMAGENS_DIR = (
-    DOWNLOADS_DIR
-    / "imagens"
-)
-
-
-# ============================================================
-# DIRETÓRIOS DE SAÍDA
-# ============================================================
-
-OUTPUT_DIR = (
-    BASE_DIR
-    / "resultados"
-)
-
-
-PDF_RESULTS_DIR = (
-    OUTPUT_DIR
-    / "pdf"
-)
-
-
-EXCEL_RESULTS_DIR = (
-    OUTPUT_DIR
-    / "excel"
-)
-
-
-# ============================================================
-# DIRETÓRIOS DE DEBUG
-# ============================================================
-
-DEBUG_DIR = (
-    BASE_DIR
-    / "debug"
-)
-
-
-DEBUG_YOLO_DIR = (
-    DEBUG_DIR
-    / "yolo"
-)
-
-
-DEBUG_OCR_DIR = (
-    DEBUG_DIR
-    / "ocr"
-)
-
-
-DEBUG_SR_DIR = (
-    DEBUG_DIR
-    / "ocr_sr"
-)
+OUTPUT_DIR = BASE_DIR / "resultados"
 
 
 # ============================================================
@@ -215,49 +144,6 @@ SR_SCALE = 2
 
 
 # ============================================================
-# FUNÇÃO PARA GARANTIR DIRETÓRIO
-# ============================================================
-
-def ensure_dir(path: Path) -> Path:
-    """
-    Cria o diretório caso ele não exista.
-    """
-
-    path.mkdir(
-        parents=True,
-        exist_ok=True
-    )
-
-    return path
-
-
-# ============================================================
-# CRIA ESTRUTURA DE DIRETÓRIOS
-# ============================================================
-
-def inicializar_diretorios():
-
-    diretorios = [
-        DOWNLOADS_DIR,
-        PDF_DIR,
-        EXCEL_DIR,
-        IMAGENS_DIR,
-
-        OUTPUT_DIR,
-        PDF_RESULTS_DIR,
-        EXCEL_RESULTS_DIR,
-
-        DEBUG_DIR,
-        DEBUG_YOLO_DIR,
-        DEBUG_OCR_DIR,
-        DEBUG_SR_DIR,
-    ]
-
-    for diretorio in diretorios:
-        ensure_dir(diretorio)
-
-
-# ============================================================
 # GARANTE PASTA PAI DE UM ARQUIVO
 # ============================================================
 
@@ -272,7 +158,35 @@ def ensure_parent(path: Path) -> Path:
 
 
 # ============================================================
-# INICIALIZA
+# RESULTADOS POR SEGMENTO, SEM SOBRESCRITA
 # ============================================================
 
-inicializar_diretorios()
+SEGMENTOS_RESULTADOS = {
+    "fraudes": "Análise de Fraudes",
+    "autoban": "Autoban — Isenção Judicial",
+    "ecovias": "Ecovias - Evasão de Pedágio",
+    "spvias": "SPVias — Evasão de Pedágio",
+    "tamoios": "Tamoios — Evasão Free Flow",
+    "tamoios_isencao": "Tamoios - Rota das Bandeiras — Isenção",
+    "cnl_isencao": "CNL — Isenção Judicial",
+    "via_colinas": "Via Colinas — Evasão de Pedágio",
+}
+
+def caminho_resultado(segmento: str, nome_arquivo: str) -> Path:
+    """Retorna caminho exclusivo em resultados/<segmento>/, sem substituir arquivo."""
+    pasta_segmento = OUTPUT_DIR / SEGMENTOS_RESULTADOS.get(segmento, segmento)
+    pasta_segmento.mkdir(parents=True, exist_ok=True)
+
+    nome = Path(nome_arquivo).name
+    original = pasta_segmento / nome
+    if not original.exists():
+        return original
+
+    caminho = Path(nome)
+    indice = 2
+    while True:
+        candidato = pasta_segmento / f"{caminho.stem}{indice}{caminho.suffix}"
+        if not candidato.exists():
+            return candidato
+        indice += 1
+

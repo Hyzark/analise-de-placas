@@ -1,4 +1,17 @@
 from __future__ import annotations
+from placas import (
+    aplicar_mascara as _aplicar_mascara_comum,
+    descobrir_mascara as _descobrir_mascara_comum,
+    distancia_placas as _distancia_placas_comum,
+    distancia_ponderada as _distancia_ponderada,
+    normalizar_ocr as _normalizar_ocr_comum,
+    normalizar_placa as _normalizar_placa,
+    CONFUNDIVEIS as _CONFUNDIVEIS,
+    MAPA_LETRAS as MAPA_LETRAS,
+    MAPA_DIGITOS as MAPA_DIGITOS,
+)
+
+from common import enviar_json
 
 import functools
 import json
@@ -29,6 +42,7 @@ from tqdm import tqdm
 
 from config import (
     BASE_DIR,
+    caminho_resultado,
     PYTHON_YOLO,
     PYTHON_OCR,
     DETECTOR_PY,
@@ -241,264 +255,44 @@ def localizar_colunas(sheet):
 # ============================================================
 
 def limpar_placa(texto) -> str:
-
-    if texto is None:
-        return ""
-
-    return re.sub(
-        r"[^A-Z0-9]",
-        "",
-        str(texto).upper(),
-    )
+    return _normalizar_placa(texto)
 
 
 # ============================================================
 # CONFUNDÍVEIS
 # ============================================================
 
-_CONFUNDIVEIS: set[tuple[str, str]] = {
-    ("0", "O"),
-    ("O", "0"),
-
-    ("1", "I"),
-    ("I", "1"),
-
-    ("1", "L"),
-    ("L", "1"),
-
-    ("T", "I"),
-    ("I", "T"),
-
-    ("2", "Z"),
-    ("Z", "2"),
-
-    ("Z", "7"),
-    ("7", "Z"),
-
-    ("4", "A"),
-    ("A", "4"),
-
-    ("5", "S"),
-    ("S", "5"),
-
-    ("6", "G"),
-    ("G", "6"),
-
-    ("8", "B"),
-    ("B", "8"),
-
-    ("B", "E"),
-    ("E", "B"),
-
-    ("D", "0"),
-    ("0", "D"),
-
-    ("D", "O"),
-    ("O", "D"),
-}
 
 
 # ============================================================
 # MAPAS DE MÁSCARA
 # ============================================================
 
-MAPA_LETRAS = {
-    "0": "O",
-    "1": "I",
-    "2": "Z",
-    "4": "A",
-    "5": "S",
-    "6": "G",
-    "7": "Z",
-    "8": "B",
-}
 
-MAPA_DIGITOS = {
-    "O": "0",
-    "Q": "0",
-    "D": "0",
-
-    "I": "1",
-    "L": "1",
-    "T": "7",
-
-    "Z": "2",
-
-    "A": "4",
-
-    "S": "5",
-
-    "G": "6",
-
-    "B": "8",
-}
 
 
 # ============================================================
 # NORMALIZA CANDIDATO PELA MÁSCARA
 # ============================================================
 
-def aplicar_mascara_placa(
-    candidato: str,
-) -> str:
-
-    candidato = limpar_placa(
-        candidato
-    )
-
-    if len(candidato) != TAMANHO_PLACA:
-        return ""
-
-    resultado = []
-
-    for indice, char in enumerate(
-        candidato
-    ):
-
-        # A 5ª posição nunca pode ser alterada pelo OCR Limpo.
-        # Ela pode ser número (padrão antigo) ou letra (Mercosul).
-        # A comparação posterior continua responsável por avaliar a diferença.
-        if indice == 4:
-            resultado.append(char)
-            continue
-
-        tipo = MASCARA_PLACA[
-            indice
-        ]
-
-        if tipo == "L":
-
-            if char.isalpha():
-
-                resultado.append(
-                    char
-                )
-
-            elif char in MAPA_LETRAS:
-
-                resultado.append(
-                    MAPA_LETRAS[
-                        char
-                    ]
-                )
-
-            else:
-
-                resultado.append(
-                    char
-                )
-
-        else:
-
-            if char.isdigit():
-
-                resultado.append(
-                    char
-                )
-
-            elif char in MAPA_DIGITOS:
-
-                resultado.append(
-                    MAPA_DIGITOS[
-                        char
-                    ]
-                )
-
-            else:
-
-                resultado.append(
-                    char
-                )
-
-    return "".join(
-        resultado
-    )
+def aplicar_mascara_placa(candidato: str) -> str:
+    return _aplicar_mascara_comum(candidato, MASCARA_PLACA, MAPA_LETRAS, MAPA_DIGITOS, tamanho=TAMANHO_PLACA, comprimento_invalido="vazio", preservar_indice=4)
 
 
 # ============================================================
 # LEVENSHTEIN
 # ============================================================
 
-@functools.lru_cache(
-    maxsize=16384
-)
-def _levenshtein(
-    a: str,
-    b: str,
-) -> float:
-
-    anterior = list(
-        range(
-            len(b) + 1
-        )
-    )
-
-    for i, ca in enumerate(
-        a,
-        start=1,
-    ):
-
-        atual = [i]
-
-        for j, cb in enumerate(
-            b,
-            start=1,
-        ):
-
-            if ca == cb:
-
-                custo = 0.0
-
-            elif (
-                ca,
-                cb,
-            ) in _CONFUNDIVEIS:
-
-                custo = 0.35
-
-            else:
-
-                custo = 1.0
-
-            atual.append(
-                min(
-                    anterior[j] + 1,
-                    atual[j - 1] + 1,
-                    anterior[j - 1] + custo,
-                )
-            )
-
-        anterior = atual
-
-    return float(
-        anterior[-1]
-    )
+def _levenshtein(a: str, b: str) -> float:
+    return float(_distancia_ponderada(a, b, _CONFUNDIVEIS))
 
 
 # ============================================================
 # DISTÂNCIA
 # ============================================================
 
-def distancia_placas(
-    placa_a,
-    placa_b,
-) -> float:
-
-    a = limpar_placa(
-        placa_a
-    )
-
-    b = limpar_placa(
-        placa_b
-    )
-
-    if not a or not b:
-        return 999.0
-
-    return _levenshtein(
-        a,
-        b,
-    )
+def distancia_placas(placa_a, placa_b) -> float:
+    return _distancia_placas_comum(placa_a, placa_b, _CONFUNDIVEIS)
 
 
 # ============================================================
@@ -1012,27 +806,6 @@ def extrair_placa_do_ocr(
 # JSON
 # ============================================================
 
-def enviar_json(
-    processo,
-    dados,
-):
-
-    if processo.poll() is not None:
-
-        raise RuntimeError(
-            "Processo já encerrou. "
-            f"Código: {processo.returncode}"
-        )
-
-    processo.stdin.write(
-        json.dumps(
-            dados,
-            ensure_ascii=False,
-        )
-        + "\n"
-    )
-
-    processo.stdin.flush()
 
 
 def ler_json(
@@ -3366,11 +3139,7 @@ def processar_pasta(
         # ARQUIVO DE SAÍDA
         # ====================================================
 
-        saida = (
-            pasta
-            /
-            NOME_SAIDA
-        )
+        saida = caminho_resultado("via_colinas", NOME_SAIDA)
 
         if saida.exists():
             saida.unlink()

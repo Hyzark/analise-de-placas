@@ -1444,7 +1444,7 @@ def main():
         [
             arquivo
             for arquivo
-            in pasta_imagens.iterdir()
+            in pasta_imagens.rglob("*")
             if (
                 arquivo.is_file()
                 and
@@ -1457,7 +1457,7 @@ def main():
             )
         ],
         key=lambda p:
-            p.name.lower()
+            str(p.relative_to(pasta_imagens)).lower()
     )
 
     print(
@@ -2309,4 +2309,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
