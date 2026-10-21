@@ -60,17 +60,38 @@ As rotinas de OCR e detecção são executadas por processos auxiliares:
 
 Ao alterar a regra de normalização ou comparação, prefira centralizar a mudança em `placas.py` e revisar os módulos que a consomem. Nem todos os segmentos analisam os mesmos dados ou aplicam exatamente os mesmos critérios de negócio.
 
-## Ambientes Python
+## Ambientes Python e dependências
 
-O projeto contém três ambientes virtuais:
+O projeto mantém três ambientes virtuais, cada um com seu arquivo de dependências:
 
-- `.venv`: ambiente principal usado ao iniciar `main.py` pelo comando de início rápido;
-- `.venv_ocr`: ambiente dedicado às rotinas de OCR;
-- `.venv_yolo`: ambiente dedicado à detecção de placas.
+| Ambiente | Uso | Arquivo de dependências |
+|---|---|---|
+| `.venv` | Aplicação principal e menu (`main.py`) | `requirements.txt` |
+| `.venv_ocr` | Reconhecimento de texto e placas | `requirements_ocr.txt` |
+| `.venv_yolo` | Detecção de placas | `requirements_yolo.txt` |
 
-`config.py` aponta os processos auxiliares para os executáveis específicos de `.venv_ocr` e `.venv_yolo`. Assim, mesmo iniciando o menu pelo `.venv`, OCR e detecção continuam sendo executados nos ambientes próprios.
+`config.py` aponta os processos auxiliares para os executáveis específicos de `.venv_ocr` e `.venv_yolo`. Inicie o menu pelo `.venv` para garantir que os pacotes principais estejam disponíveis:
 
-Os diretórios de ambiente não devem ser tratados como código-fonte nem enviados como parte de um repositório. No estado atual, não há arquivo `requirements.txt` na raiz. Antes de transferir ou recriar os ambientes em outro computador, a equipe deve registrar as versões das dependências instaladas em cada ambiente e documentar esse procedimento. Também é necessário conferir se os executáveis esperados existem em `Scripts\python.exe`.
+```powershell
+.\.venv\Scripts\python.exe .\main.py
+```
+
+Para recriar os ambientes em uma máquina com Python compatível, execute na raiz do projeto:
+
+```powershell
+py -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+
+py -m venv .venv_ocr
+.\.venv_ocr\Scripts\python.exe -m pip install -r requirements_ocr.txt
+
+py -m venv .venv_yolo
+.\.venv_yolo\Scripts\python.exe -m pip install -r requirements_yolo.txt
+```
+
+As listas foram preparadas a partir do `pip list` de cada ambiente e fixam as versões informadas. O `requirements_ocr.txt` foi montado com a lista enviada porque o executável atual de `.venv_ocr` não iniciou neste caminho. Esses arquivos registram versões, mas não garantem instalação idêntica em qualquer máquina: OCR e detecção usam pacotes de GPU/CUDA, e a compatibilidade depende do Python, do driver e do hardware disponíveis. Valide a instalação e os processos auxiliares no computador de destino.
+
+Não distribua as pastas `.venv`, `.venv_ocr` ou `.venv_yolo` como código-fonte. Recrie-as usando os arquivos de dependências e mantenha os modelos necessários na pasta `models/`.
 
 ## Modelos necessários
 
@@ -101,6 +122,9 @@ Mantenha os modelos necessários junto ao projeto e confira os caminhos configur
 | `detector_process.py` | Processo auxiliar de detecção de placas |
 | `ocr_process.py` | Processo auxiliar de OCR |
 | `SAU/` | Processamentos de imagens de veículos administrativos e operacionais |
+| `requirements.txt` | Dependências do ambiente principal `.venv` |
+| `requirements_ocr.txt` | Dependências do ambiente `.venv_ocr` |
+| `requirements_yolo.txt` | Dependências do ambiente `.venv_yolo` |
 | `models/` | Modelos necessários ao processamento de imagens |
 | `resultados/` | Planilhas e arquivos gerados pelas análises |
 
@@ -121,3 +145,5 @@ Mantenha os modelos necessários junto ao projeto e confira os caminhos configur
 4. Ao modificar OCR, detector ou comparação de placas, verifique os outros processadores que usam essas funções.
 5. Para o repasse a outra equipe, inclua o código, os modelos autorizados e um inventário reproduzível das dependências e versões dos três ambientes.
 6. Evite armazenar relatórios reais com dados pessoais no repositório. Use arquivos de exemplo anonimizados para documentar entradas.
+
+
