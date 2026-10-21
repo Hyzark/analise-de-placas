@@ -1,0 +1,19 @@
+# Ambientes Virtuais Python
+.venv/
+.venv_ocr/
+.venv_yolo/
+
+# Pycache e temporários do Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Dados temporários, uploads e resultados gerados
+arquivos/
+debug/
+downloads/
+resultados/
+
+# Ficheiros de configuração com dados sensíveis ou locais
+# (Descomenta a linha abaixo se o config.py contiver chaves/credenciais privadas)
+# config.py
